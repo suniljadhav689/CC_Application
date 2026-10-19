@@ -7,6 +7,11 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      // OAuth starts with a top-level navigation to /api/... . Let FastAPI
+      // handle those navigations instead of the service worker's SPA fallback.
+      workbox: {
+        navigateFallbackDenylist: [/^\/api\//, /^\/gmail\/oauth\/callback(?:\/|$)/],
+      },
       manifest: {
         name: 'Card Analyzer',
         short_name: 'CardAnalyzer',

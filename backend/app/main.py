@@ -3,6 +3,9 @@ Credit Card Spend Analyzer — FastAPI Backend
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 
 from app.db.database import init_db
 from app.api.health import router as health_router
@@ -18,6 +21,15 @@ app = FastAPI(
     description="Personal finance backend — parses credit card statements and stores transactions.",
     version="1.0.0",
 )
+
+# In the container, the frontend and API share one origin. The frontend keeps
+# its /api prefix so Vite can proxy it during development; strip it here in
+# production before matching the existing API routes.
+@app.middleware("http")
+async def strip_api_prefix(request, call_next):
+    if request.url.path == "/api" or request.url.path.startswith("/api/"):
+        request.scope["path"] = request.url.path[4:] or "/"
+    return await call_next(request)
 
 # CORS — allow your Firebase frontend and local dev
 app.add_middleware(
@@ -36,6 +48,17 @@ app.include_router(analytics_router)
 app.include_router(backup_router)
 app.include_router(gmail_router)
 app.include_router(cards_router)
+
+FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if FRONTEND_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend(full_path: str):
+        requested_file = FRONTEND_DIST / full_path
+        if full_path and requested_file.is_file() and FRONTEND_DIST in requested_file.parents:
+            return FileResponse(requested_file)
+        return FileResponse(FRONTEND_DIST / "index.html")
 
 
 @app.on_event("startup")

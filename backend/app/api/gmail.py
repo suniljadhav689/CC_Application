@@ -112,7 +112,11 @@ def oauth_start():
     client_id, _, redirect_uri = _ensure_configured()
     state = secrets.token_urlsafe(32)
     now = time.time()
-    _pending_states.clear()
+    # Keep other unexpired flows valid so opening a second tab or retrying the
+    # button does not invalidate the callback from the first tab.
+    for pending_state, expiry in list(_pending_states.items()):
+        if expiry < now:
+            _pending_states.pop(pending_state, None)
     _pending_states[state] = now + 600
     query = urlencode({
         "client_id": client_id,

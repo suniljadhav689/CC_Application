@@ -1,9 +1,9 @@
 @echo off
 title Credit Card Analyzer over Tailscale
 echo Setting up a private HTTPS URL for your Tailscale network...
-echo Make sure START_APP.bat is running first.
+echo Make sure the Docker app is running first: docker compose up -d
 echo.
-tailscale serve --bg http://127.0.0.1:5174
+tailscale serve --bg http://127.0.0.1:8000
 if errorlevel 1 (
   echo.
   echo Tailscale Serve could not start. Check that Tailscale is installed, connected,

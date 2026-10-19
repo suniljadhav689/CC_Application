@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    image: credit-card-analyzer:latest
+    container_name: credit-card-analyzer
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      - ./backend/data:/app/backend/data
+    env_file:
+      - path: ./backend/.env
+        required: false
+    restart: unless-stopped
