@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.db.database import get_db
 from app.models.transaction import Transaction
+from app.models.card import Card
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
@@ -19,6 +20,7 @@ def txn_to_dict(t: Transaction) -> dict:
         "id": t.id,
         "statement_id": t.statement_id,
         "card_id": t.card_id,
+        "card_name": t.card.display_name if t.card else "Unknown card",
         "date": t.date.isoformat() if t.date else None,
         "merchant": t.merchant,
         "merchant_corrected": t.merchant_corrected,
@@ -66,7 +68,7 @@ def list_transactions(
             Transaction.notes.ilike(f"%{search}%"),
         ))
     if card_id is not None:
-        q = q.filter(Transaction.card_id == card_id)
+        q = q.filter(Transaction.card_id.is_(None) if card_id == 0 else Transaction.card_id == card_id)
     if category:
         q = q.filter(or_(
             Transaction.category == category,
@@ -96,6 +98,7 @@ def list_transactions(
 
 
 class TransactionUpdate(BaseModel):
+    card_id: Optional[int] = None
     merchant_corrected: Optional[str] = None
     category_corrected: Optional[str] = None
     is_fraud: Optional[bool] = None
@@ -115,7 +118,11 @@ def update_transaction(txn_id: int, update: TransactionUpdate, db: Session = Dep
     if not txn:
         raise HTTPException(404, detail="Transaction not found.")
 
-    for field, value in update.model_dump(exclude_none=True).items():
+    changes = update.model_dump(exclude_unset=True)
+    if "card_id" in changes and changes["card_id"] is not None:
+        if not db.query(Card.id).filter(Card.id == changes["card_id"]).first():
+            raise HTTPException(400, detail="Selected card does not exist.")
+    for field, value in changes.items():
         setattr(txn, field, value)
 
     db.commit()
@@ -135,6 +142,7 @@ def delete_transaction(txn_id: int, db: Session = Depends(get_db)):
 
 class BulkUpdate(BaseModel):
     ids: List[int]
+    card_id: Optional[int] = None
     category_corrected: Optional[str] = None
     is_fraud: Optional[bool] = None
     is_friends: Optional[bool] = None
@@ -143,9 +151,13 @@ class BulkUpdate(BaseModel):
 
 @router.post("/bulk-update")
 def bulk_update(payload: BulkUpdate, db: Session = Depends(get_db)):
+    if payload.card_id is not None and not db.query(Card.id).filter(Card.id == payload.card_id).first():
+        raise HTTPException(400, detail="Selected card does not exist.")
     txns = db.query(Transaction).filter(Transaction.id.in_(payload.ids)).all()
     updated = 0
     for txn in txns:
+        if payload.card_id is not None:
+            txn.card_id = payload.card_id
         if payload.category_corrected is not None:
             txn.category_corrected = payload.category_corrected
         if payload.is_fraud is not None:

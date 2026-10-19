@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { getTransactions, updateTransaction, bulkUpdateTransactions, deleteTransaction } from '../services/apiService';
+import { getTransactions, updateTransaction, bulkUpdateTransactions, deleteTransaction, getCards } from '../services/apiService';
 import useStore from '../store/useStore';
 
 const CATEGORIES = ['Food & Dining','Groceries','Travel & Transport','Fuel','Shopping','Entertainment','Utilities & Bills','Healthcare','Education','EMI & Finance','Other'];
@@ -7,7 +7,7 @@ const CATEGORIES = ['Food & Dining','Groceries','Travel & Transport','Fuel','Sho
 function formatINR(n) { return '₹' + (n || 0).toLocaleString('en-IN'); }
 function formatDate(d) { return d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'; }
 
-function TransactionModal({ txn, onClose, onSave, onDelete }) {
+function TransactionModal({ txn, cards, onClose, onSave, onDelete }) {
   const [draft, setDraft] = useState({
     merchant_corrected: txn.merchant_corrected || txn.merchant || '',
     category_corrected: txn.category_corrected || txn.category || 'Other',
@@ -15,6 +15,7 @@ function TransactionModal({ txn, onClose, onSave, onDelete }) {
     personal_share: txn.personal_share ?? txn.amount,
     friends_share: txn.friends_share ?? 0,
     is_fraud: txn.is_fraud,
+    card_id: txn.card_id == null ? '' : String(txn.card_id),
   });
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -26,6 +27,14 @@ function TransactionModal({ txn, onClose, onSave, onDelete }) {
         <button onClick={onClose} style={{ position: 'absolute', top: 16, right: 16, background: 'transparent', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--text-muted)' }}>✕</button>
         <h2 style={{ marginTop: 0, marginBottom: 8, fontSize: 22 }}>Transaction Details</h2>
         <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 24 }}>{formatDate(txn.date)} • {isDebit ? 'Debit' : 'Credit'}</div>
+
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>CARD</label>
+          <select className="form-select" value={draft.card_id} onChange={e => setDraft({ ...draft, card_id: e.target.value })}>
+            <option value="">Unknown / unassigned</option>
+            {cards.map(card => <option key={card.id} value={card.id}>{card.bank_name} · {card.display_name}</option>)}
+          </select>
+        </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
           <div>
@@ -96,7 +105,7 @@ function TransactionModal({ txn, onClose, onSave, onDelete }) {
           
           <div style={{ display: 'flex', gap: 12 }}>
             <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-            <button className="btn btn-primary" onClick={() => onSave(txn.id, draft)}>Save Changes</button>
+            <button className="btn btn-primary" onClick={() => onSave(txn.id, { ...draft, card_id: draft.card_id ? Number(draft.card_id) : null })}>Save Changes</button>
           </div>
         </div>
       </div>
@@ -124,6 +133,7 @@ function TransactionRow({ txn, mode, selected, onSelect, onClick }) {
       <td>
         <span className="badge badge-category">{category}</span>
       </td>
+      <td style={{ color: txn.card_id ? 'var(--text-secondary)' : 'var(--warning)', fontSize: 12, whiteSpace: 'nowrap' }}>{txn.card_name || 'Unknown card'}</td>
       <td style={{ textAlign: 'right', fontWeight: 700, fontSize: 15, color: isDebit ? 'var(--danger)' : 'var(--success)' }}>
         {isDebit ? '-' : '+'}{formatINR(txn.amount)}
         {hasSplit && (
@@ -150,11 +160,13 @@ export default function Transactions() {
   const [txns, setTxns] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState({ search: '', category: '', is_fraud: '', is_friends: '', date_from: '', date_to: '' });
+  const [filters, setFilters] = useState({ search: '', category: '', card_id: '', is_fraud: '', is_friends: '', date_from: '', date_to: '' });
   const [selected, setSelected] = useState(new Set());
   const [page, setPage] = useState(0);
   const [toast, setToast] = useState('');
   const [editingTxn, setEditingTxn] = useState(null); // The txn opened in modal
+  const [cards, setCards] = useState([]);
+  const [bulkCardId, setBulkCardId] = useState('');
   const PAGE_SIZE = 50;
 
   function showToast(msg) {
@@ -180,6 +192,7 @@ export default function Transactions() {
   }
 
   useEffect(() => { loadData(); }, [mode, filters, page]);
+  useEffect(() => { if (mode === 'live') getCards().then(setCards).catch(console.error); }, [mode]);
 
   async function handleUpdate(id, data) {
     try {
@@ -230,6 +243,19 @@ export default function Transactions() {
     }
   }
 
+  async function bulkAssignCard() {
+    if (!selected.size || !bulkCardId || mode !== 'live') return;
+    try {
+      const ids = [...selected];
+      const card = cards.find((item) => item.id === Number(bulkCardId));
+      await bulkUpdateTransactions(ids, { card_id: Number(bulkCardId) });
+      setTxns((prev) => prev.map((t) => selected.has(t.id) ? { ...t, card_id: card.id, card_name: card.display_name } : t));
+      setSelected(new Set());
+      setBulkCardId('');
+      showToast(`✅ Assigned ${ids.length} transactions to ${card.display_name}`);
+    } catch (e) { showToast('❌ ' + e.message); }
+  }
+
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
   return (
@@ -246,6 +272,7 @@ export default function Transactions() {
             <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{selected.size} selected</span>
             <button className="btn btn-danger btn-sm" onClick={() => bulkFlag('is_fraud')}>🚨 Mark Fraud</button>
             <button className="btn btn-sm" onClick={() => bulkFlag('is_friends')} style={{ background: 'var(--purple-glow)', color: 'var(--friends)', border: '1px solid rgba(168,85,247,0.3)' }}>👫 Mark Friends</button>
+            {cards.length > 0 && <><select className="form-select" aria-label="Assign selected transactions to card" value={bulkCardId} onChange={(e) => setBulkCardId(e.target.value)} style={{ width: 190 }}><option value="">Assign card…</option>{cards.map((card) => <option key={card.id} value={card.id}>{card.display_name}</option>)}</select><button className="btn btn-primary btn-sm" disabled={!bulkCardId} onClick={bulkAssignCard}>Assign to selected</button></>}
             <button className="btn btn-ghost btn-sm" onClick={() => setSelected(new Set())}>Clear</button>
           </div>
         )}
@@ -261,6 +288,11 @@ export default function Transactions() {
           value={filters.category} onChange={(e) => { setFilters({ ...filters, category: e.target.value }); setPage(0); }}>
           <option value="">All Categories</option>
           {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select className="form-select" style={{ maxWidth: 210 }} aria-label="Filter by card" value={filters.card_id} onChange={(e) => { setFilters({ ...filters, card_id: e.target.value }); setPage(0); }}>
+          <option value="">All cards</option>
+          {cards.map((card) => <option key={card.id} value={card.id}>{card.display_name}</option>)}
+          <option value="0">Unknown card</option>
         </select>
         <select className="form-select" style={{ maxWidth: 140 }}
           value={filters.is_fraud} onChange={(e) => { setFilters({ ...filters, is_fraud: e.target.value }); setPage(0); }}>
@@ -278,7 +310,7 @@ export default function Transactions() {
           value={filters.date_from} onChange={(e) => { setFilters({ ...filters, date_from: e.target.value }); setPage(0); }} />
         <input type="date" className="form-input" style={{ maxWidth: 160 }}
           value={filters.date_to} onChange={(e) => { setFilters({ ...filters, date_to: e.target.value }); setPage(0); }} />
-        <button className="btn btn-ghost btn-sm" onClick={() => { setFilters({ search: '', category: '', is_fraud: '', is_friends: '', date_from: '', date_to: '' }); setPage(0); }}>Reset</button>
+        <button className="btn btn-ghost btn-sm" onClick={() => { setFilters({ search: '', category: '', card_id: '', is_fraud: '', is_friends: '', date_from: '', date_to: '' }); setPage(0); }}>Reset</button>
       </div>
 
       {loading ? (
@@ -293,6 +325,7 @@ export default function Transactions() {
                   <th>Date</th>
                   <th>Merchant</th>
                   <th>Category</th>
+                  <th>Card</th>
                   <th style={{ textAlign: 'right' }}>Amount</th>
                   <th style={{ textAlign: 'center' }}>🚨</th>
                   <th style={{ textAlign: 'center' }}>👫</th>
@@ -301,7 +334,7 @@ export default function Transactions() {
               </thead>
               <tbody>
                 {txns.length === 0 ? (
-                  <tr><td colSpan={8} style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>No transactions found</td></tr>
+                  <tr><td colSpan={9} style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>No transactions found</td></tr>
                 ) : txns.map((t) => (
                   <TransactionRow key={t.id} txn={t} mode={mode}
                     selected={selected.has(t.id)} onSelect={handleSelect} onClick={setEditingTxn} />
@@ -325,6 +358,7 @@ export default function Transactions() {
       {editingTxn && (
         <TransactionModal 
           txn={editingTxn} 
+          cards={cards}
           onClose={() => setEditingTxn(null)} 
           onSave={handleUpdate} 
           onDelete={handleDelete} 

@@ -2,12 +2,14 @@
 REST API — Statements (upload, list, delete).
 """
 import os
+from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
 from sqlalchemy.orm import Session
 from typing import Optional
 
 from app.db.database import get_db
 from app.models.statement import Statement
+from app.models.gmail_import import GmailAttachmentImport
 from app.services.statement_processor import save_upload, process_statement, confirm_and_save
 
 router = APIRouter(prefix="/statements", tags=["statements"])
@@ -47,7 +49,16 @@ async def confirm_statement(
     # We allow empty transactions so users can skip statements that have 0 valid/new transactions.
 
     try:
-        saved = confirm_and_save(statement_id, transactions, db)
+        saved = confirm_and_save(statement_id, transactions, db, payload.get("card_id"))
+        gmail_imports = db.query(GmailAttachmentImport).filter(
+            GmailAttachmentImport.statement_id == statement_id,
+            GmailAttachmentImport.status == "pending_review",
+        ).all()
+        for gmail_import in gmail_imports:
+            gmail_import.status = "processed"
+            gmail_import.imported_at = datetime.utcnow()
+        if gmail_imports:
+            db.commit()
         return {"saved_count": saved, "statement_id": statement_id}
     except ValueError as e:
         raise HTTPException(404, detail=str(e))

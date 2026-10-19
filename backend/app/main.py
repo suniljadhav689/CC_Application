@@ -10,6 +10,8 @@ from app.api.statements import router as statements_router
 from app.api.transactions import router as transactions_router
 from app.api.analytics import router as analytics_router
 from app.api.backup import router as backup_router
+from app.api.gmail import router as gmail_router
+from app.api.cards import router as cards_router
 
 app = FastAPI(
     title="Credit Card Spend Analyzer",
@@ -32,6 +34,8 @@ app.include_router(statements_router)
 app.include_router(transactions_router)
 app.include_router(analytics_router)
 app.include_router(backup_router)
+app.include_router(gmail_router)
+app.include_router(cards_router)
 
 
 @app.on_event("startup")

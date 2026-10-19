@@ -1,16 +1,36 @@
-import { useState } from 'react';
-import { downloadSQLite, downloadCSV, downloadExcel } from '../services/apiService';
+import { useEffect, useState } from 'react';
+import { downloadSQLite, downloadCSV, downloadExcel, getCards, createCard } from '../services/apiService';
 import useStore from '../store/useStore';
 
 export default function Settings() {
   const mode = useStore((s) => s.mode);
-  const [backendIp, setBackendIp] = useState(localStorage.getItem('backend_ip') || '192.168.1.1');
+  const [backendIp, setBackendIp] = useState(localStorage.getItem('backend_ip') || '');
   const [backendPort, setBackendPort] = useState(localStorage.getItem('backend_port') || '8000');
   const [saved, setSaved] = useState(false);
+  const [cards, setCards] = useState([]);
+  const [cardDraft, setCardDraft] = useState({ bank_name: '', card_name: '', last_four: '' });
+  const [cardMessage, setCardMessage] = useState('');
+
+  useEffect(() => { if (mode === 'live') getCards().then(setCards).catch((e) => setCardMessage(e.message)); }, [mode]);
+
+  async function saveCard(e) {
+    e.preventDefault();
+    try {
+      const card = await createCard({ ...cardDraft, last_four: cardDraft.last_four || null });
+      setCards((current) => current.some((item) => item.id === card.id) ? current : [...current, card]);
+      setCardDraft({ bank_name: '', card_name: '', last_four: '' });
+      setCardMessage(`${card.display_name} is ready for statement imports.`);
+    } catch (err) { setCardMessage(err.message); }
+  }
 
   function saveBackend() {
-    localStorage.setItem('backend_ip', backendIp);
-    localStorage.setItem('backend_port', backendPort);
+    if (backendIp.trim()) {
+      localStorage.setItem('backend_ip', backendIp.trim());
+      localStorage.setItem('backend_port', backendPort.trim() || '8000');
+    } else {
+      localStorage.removeItem('backend_ip');
+      localStorage.removeItem('backend_port');
+    }
     setSaved(true);
     setTimeout(() => {
       setSaved(false);
@@ -31,13 +51,13 @@ export default function Settings() {
       <div className="card" style={{ marginBottom: 20 }}>
         <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>📡 Backend Connection</div>
         <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
-          Enter your Windows PC's local IP address. Go to your PC → PowerShell → type <code style={{ background: 'var(--bg-input)', padding: '2px 6px', borderRadius: 4, fontSize: 12 }}>ipconfig</code> → look for "IPv4 Address".
+          By default, the app connects through this page’s own secure address (works with Tailscale Serve). Only enter an IP below to connect directly over your local Wi-Fi.
         </div>
 
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div className="form-group" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
-            <label className="form-label">PC IP Address</label>
-            <input className="form-input" value={backendIp} onChange={(e) => setBackendIp(e.target.value)} placeholder="e.g. 192.168.1.1" />
+            <label className="form-label">Optional backend IP</label>
+            <input className="form-input" value={backendIp} onChange={(e) => setBackendIp(e.target.value)} placeholder="Leave blank for same-origin / Tailscale" />
           </div>
           <div className="form-group" style={{ width: 100, marginBottom: 0 }}>
             <label className="form-label">Port</label>
@@ -53,8 +73,22 @@ export default function Settings() {
             <div className="mode-dot" />
             {mode === 'live' ? '🟢 Backend connected' : mode === 'readonly' ? '🟡 Backend offline' : '⏳ Checking...'}
           </div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Current: http://{backendIp}:{backendPort}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Current: {backendIp ? `http://${backendIp}:${backendPort}` : 'Same-origin /api'}</div>
         </div>
+      </div>
+
+      {/* Card catalog */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>💳 Your cards</div>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>Add each card once. Choose the matching card when reviewing a statement so its transactions are attributed correctly.</div>
+        {cardMessage && <div role="status" style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>{cardMessage}</div>}
+        {cards.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 18 }}>{cards.map((card) => <span key={card.id} className="badge badge-category">{card.bank_name} · {card.display_name}</span>)}</div>}
+        <form onSubmit={saveCard} style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div className="form-group" style={{ flex: '1 1 150px', marginBottom: 0 }}><label className="form-label">Bank</label><input className="form-input" required maxLength={80} placeholder="e.g. HDFC" value={cardDraft.bank_name} onChange={(e) => setCardDraft({ ...cardDraft, bank_name: e.target.value })} /></div>
+          <div className="form-group" style={{ flex: '1 1 200px', marginBottom: 0 }}><label className="form-label">Card name</label><input className="form-input" required maxLength={120} placeholder="e.g. Tata Neu Plus" value={cardDraft.card_name} onChange={(e) => setCardDraft({ ...cardDraft, card_name: e.target.value })} /></div>
+          <div className="form-group" style={{ width: 120, marginBottom: 0 }}><label className="form-label">Last 4 digits</label><input className="form-input" inputMode="numeric" maxLength={4} pattern="[0-9]{4}" placeholder="Optional" value={cardDraft.last_four} onChange={(e) => setCardDraft({ ...cardDraft, last_four: e.target.value.replace(/\D/g, '').slice(0, 4) })} /></div>
+          <button className="btn btn-primary" type="submit" disabled={mode !== 'live'}>Add card</button>
+        </form>
       </div>
 
       {/* Backup & Export */}

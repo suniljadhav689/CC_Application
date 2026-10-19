@@ -559,6 +559,9 @@ tbody td {
 @media (max-width: 768px) {
   .sidebar { display: none; }
   .bottom-nav { display: block; }
+  .bottom-nav-inner > a { flex: 1; min-width: 0; }
+  .bottom-nav-item { width: 100%; padding: 7px 2px; gap: 2px; font-size: 8px; white-space: nowrap; }
+  .bottom-nav-item .nav-icon { font-size: 17px; }
   .main-content { margin-left: 0; padding: 20px 16px calc(var(--nav-bottom-height) + 16px); }
   .stat-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
   .stat-value { font-size: 20px; }

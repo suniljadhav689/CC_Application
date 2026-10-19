@@ -1,7 +1,7 @@
 """
 REST API — Analytics aggregations.
 """
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract
 from typing import Optional
@@ -120,15 +120,52 @@ def by_card(
         q.with_entities(
             Transaction.card_id,
             func.coalesce(Card.card_name, Card.bank_name, "Unknown").label("card_name"),
+            Card.bank_name.label("bank_name"),
+            Card.last_four.label("last_four"),
             func.sum(func.coalesce(Transaction.personal_share, Transaction.amount)).label("total"),
             func.sum(Transaction.amount).label("raw_total"),
             func.count(Transaction.id).label("count"),
         )
-        .group_by(Transaction.card_id)
+        .group_by(Transaction.card_id, "card_name", "bank_name", "last_four")
         .order_by(func.sum(func.coalesce(Transaction.personal_share, Transaction.amount)).desc())
         .all()
     )
-    return [{"card_id": r.card_id, "card_name": r.card_name, "total": round(r.total, 2), "raw_total": round(r.raw_total, 2), "count": r.count} for r in rows]
+    return [{"card_id": r.card_id, "card_name": f"{r.bank_name} · {r.card_name}{f' ••{r.last_four}' if r.last_four else ''}" if r.card_id else "Unknown card", "total": round(r.total, 2), "raw_total": round(r.raw_total, 2), "count": r.count} for r in rows]
+
+
+@router.get("/by-card-month")
+def by_card_month(
+    db: Session = Depends(get_db),
+    from_year: int = Query(..., ge=2000, le=2200),
+    to_year: int = Query(..., ge=2000, le=2200),
+):
+    """Monthly personal and full-charge totals by card across an inclusive year range."""
+    from app.models.card import Card
+    if from_year > to_year or to_year - from_year > 9:
+        raise HTTPException(status_code=400, detail="Choose a valid range of up to 10 years.")
+    q = EXCLUDED_FROM_TOTALS(db.query(Transaction)).join(Card, Transaction.card_id == Card.id, isouter=True)
+    q = q.filter(extract("year", Transaction.date) >= from_year, extract("year", Transaction.date) <= to_year)
+    rows = q.with_entities(
+        Transaction.card_id,
+        func.coalesce(Card.card_name, Card.bank_name, "Unknown card").label("card_name"),
+        Card.bank_name.label("bank_name"),
+        Card.last_four.label("last_four"),
+        extract("year", Transaction.date).label("year"),
+        extract("month", Transaction.date).label("month"),
+        func.sum(func.coalesce(Transaction.personal_share, Transaction.amount)).label("total"),
+        func.sum(Transaction.amount).label("raw_total"),
+        func.count(Transaction.id).label("count"),
+    ).group_by(Transaction.card_id, "card_name", "bank_name", "last_four", "year", "month").order_by("year", "month", "card_name").all()
+    return [{
+        "card_id": r.card_id,
+        "card_name": f"{r.bank_name} · {r.card_name}{f' ••{r.last_four}' if r.last_four else ''}" if r.card_id else "Unknown card",
+        "year": int(r.year),
+        "month": int(r.month),
+        "month_key": f"{int(r.year)}-{int(r.month):02d}",
+        "total": round(r.total, 2),
+        "raw_total": round(r.raw_total, 2),
+        "count": r.count,
+    } for r in rows]
 
 
 @router.get("/top-merchants")

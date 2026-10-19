@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getByMonth, getByCategory, getByCard, getTopMerchants, getTransactions } from '../services/apiService';
+import { getByMonth, getByCategory, getByCard, getTopMerchants, getTransactions, getCardMonthlySpend, getCards } from '../services/apiService';
 import useStore from '../store/useStore';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend
+  PieChart, Pie, Cell, Legend, LineChart, Line
 } from 'recharts';
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -24,6 +24,11 @@ export default function Analytics() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState('');
+  const [knownCards, setKnownCards] = useState([]);
+  const [cardMonthRows, setCardMonthRows] = useState([]);
+  const [comparisonYears, setComparisonYears] = useState(3);
+  const [comparisonMetric, setComparisonMetric] = useState('raw_total');
+  const [visibleCards, setVisibleCards] = useState(null);
 
   const yearParams = useMemo(() => ({ date_from: `${year}-01-01`, date_to: `${year}-12-31` }), [year]);
 
@@ -48,6 +53,18 @@ export default function Analytics() {
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [mode, year, yearParams]);
+
+  useEffect(() => {
+    if (mode !== 'live') return;
+    let active = true;
+    const fromYear = year - comparisonYears + 1;
+    Promise.all([getCards(), getCardMonthlySpend(fromYear, year)]).then(([cards, rows]) => {
+      if (!active) return;
+      setKnownCards(cards);
+      setCardMonthRows(rows);
+    }).catch((e) => { if (active) setError(e.message || 'Could not load monthly card comparison.'); });
+    return () => { active = false; };
+  }, [mode, year, comparisonYears]);
 
   useEffect(() => {
     if (!selectedMonth || mode !== 'live') { setLargeTransactions([]); return; }
@@ -75,6 +92,22 @@ export default function Analytics() {
   };
 
   const selectedSummary = monthData.find((item) => item.month === selectedMonth);
+  const comparisonCardMap = new Map();
+  knownCards.forEach((card) => comparisonCardMap.set(`card-${card.id}`, card.display_name));
+  cardMonthRows.forEach((row) => {
+    const key = `card-${row.card_id ?? 'unknown'}`;
+    if (!comparisonCardMap.has(key)) comparisonCardMap.set(key, row.card_name || 'Unknown card');
+  });
+  const comparisonKeys = [...comparisonCardMap.keys()];
+  const comparisonDataMap = new Map();
+  cardMonthRows.forEach((row) => {
+    const key = `card-${row.card_id ?? 'unknown'}`;
+    const label = `${MONTH_NAMES[row.month - 1].slice(0, 3)} '${String(row.year).slice(-2)}`;
+    if (!comparisonDataMap.has(row.month_key)) comparisonDataMap.set(row.month_key, { month_key: row.month_key, label });
+    comparisonDataMap.get(row.month_key)[key] = row[comparisonMetric];
+  });
+  const cardComparisonData = [...comparisonDataMap.values()].sort((a, b) => a.month_key.localeCompare(b.month_key));
+  const shownCardKeys = visibleCards === null ? comparisonKeys : visibleCards;
 
   return <div>
     <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -107,6 +140,39 @@ export default function Analytics() {
             <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatINR(item.total)}</td><td style={{ textAlign: 'right' }}>{formatINR(item.raw_total)}</td><td style={{ textAlign: 'right' }}>{item.count}</td>
           </tr>) : <tr><td colSpan="4" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No transactions found for {year}.</td></tr>}</tbody>
         </table></div>
+      </section>
+
+      <section className="chart-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+          <div><div className="chart-title">Monthly spend comparison by card</div><p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '-10px 0 14px' }}>Compare cards month by month across years. Select a year range and tap cards to show or hide them.</p></div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <select aria-label="Spend measure" className="form-select" style={{ width: 170 }} value={comparisonMetric} onChange={(e) => setComparisonMetric(e.target.value)}>
+              <option value="raw_total">Full card charges</option><option value="total">My share</option>
+            </select>
+            <select aria-label="Comparison year range" className="form-select" style={{ width: 145 }} value={comparisonYears} onChange={(e) => setComparisonYears(Number(e.target.value))}>
+              {[1, 3, 5, 10].map((count) => <option key={count} value={count}>{count} {count === 1 ? 'year' : 'years'}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+          {comparisonKeys.map((key, i) => {
+            const visible = shownCardKeys.includes(key);
+            return <button key={key} type="button" aria-pressed={visible} onClick={() => setVisibleCards((current) => {
+              const selected = current === null ? comparisonKeys : current;
+              const next = selected.includes(key) ? selected.filter((item) => item !== key) : [...selected, key];
+              return next.length === comparisonKeys.length ? null : next;
+            })} style={{ border: `1px solid ${COLORS[i % COLORS.length]}`, borderRadius: 20, padding: '5px 10px', background: visible ? `${COLORS[i % COLORS.length]}22` : 'transparent', color: visible ? COLORS[i % COLORS.length] : 'var(--text-muted)', fontSize: 12, cursor: 'pointer' }}>{comparisonCardMap.get(key)}</button>;
+          })}
+        </div>
+        {cardComparisonData.length && shownCardKeys.length ? <ResponsiveContainer width="100%" height={310}>
+          <LineChart data={cardComparisonData} margin={{ top: 5, right: 12, left: 8, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+            <XAxis dataKey="label" tick={{ fill: '#9090b8', fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={14} />
+            <YAxis tick={{ fill: '#9090b8', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
+            <Tooltip content={<CustomTooltip />} />
+            {shownCardKeys.map((key) => <Line key={key} type="monotone" dataKey={key} name={comparisonCardMap.get(key)} stroke={COLORS[comparisonKeys.indexOf(key) % COLORS.length]} strokeWidth={2.5} dot={{ r: 3 }} activeDot={{ r: 6 }} connectNulls />)}
+          </LineChart>
+        </ResponsiveContainer> : <div style={{ padding: 35, textAlign: 'center', color: 'var(--text-muted)' }}>{comparisonCardMap.size ? 'Select at least one card to show.' : `No card-linked spending found from ${year - comparisonYears + 1} to ${year}.`}</div>}
       </section>
 
       {selectedMonth && <section className="chart-card">

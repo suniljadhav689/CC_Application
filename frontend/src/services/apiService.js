@@ -65,6 +65,19 @@ export async function getTopMerchants(params = {}) {
   return request(`/analytics/top-merchants?${q}`);
 }
 
+export async function getCardMonthlySpend(fromYear, toYear) {
+  const q = new URLSearchParams({ from_year: fromYear, to_year: toYear });
+  return request(`/analytics/by-card-month?${q}`);
+}
+
+export async function getCards() {
+  return request('/cards/');
+}
+
+export async function createCard(data) {
+  return request('/cards/', { method: 'POST', body: JSON.stringify(data) });
+}
+
 // ── Statements ──────────────────────────────────────────────────────────── //
 export async function getStatements() {
   return request('/statements/');
@@ -84,15 +97,42 @@ export async function uploadStatement(file, cardId) {
   return res.json();
 }
 
-export async function confirmStatement(statementId, transactions) {
+export async function confirmStatement(statementId, transactions, cardId) {
   return request(`/statements/${statementId}/confirm`, {
     method: 'POST',
-    body: JSON.stringify({ transactions }),
+    body: JSON.stringify({ transactions, card_id: cardId ? Number(cardId) : null }),
   });
 }
 
 export async function deleteStatement(id) {
   return request(`/statements/${id}`, { method: 'DELETE' });
+}
+
+// ── Gmail statement import ──────────────────────────────────────────────── //
+export async function getGmailStatus() {
+  return request('/gmail/status');
+}
+
+export async function getGmailLabels() {
+  return request('/gmail/labels');
+}
+
+export async function getGmailMessages(labelIds, dateFrom, dateTo) {
+  const q = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+  labelIds.forEach((id) => q.append('label_ids', id));
+  return request(`/gmail/messages?${q}`);
+}
+
+export async function importGmailAttachment(attachment) {
+  return request('/gmail/import', { method: 'POST', body: JSON.stringify(attachment) });
+}
+
+export async function disconnectGmail() {
+  return request('/gmail/connection', { method: 'DELETE' });
+}
+
+export function connectGmail() {
+  window.location.assign(`${getBackendUrl()}/gmail/oauth/start`);
 }
 
 // ── Backup ──────────────────────────────────────────────────────────────── //

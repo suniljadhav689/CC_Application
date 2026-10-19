@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard';
 import Transactions from './pages/Transactions';
 import Upload from './pages/Upload';
 import Analytics from './pages/Analytics';
+import CardInsights from './pages/CardInsights';
 import Settings from './pages/Settings';
 
 const NAV_ITEMS = [
@@ -15,6 +16,7 @@ const NAV_ITEMS = [
   { to: '/transactions', label: 'Transactions', icon: '💳' },
   { to: '/upload', label: 'Upload', icon: '📤' },
   { to: '/analytics', label: 'Analytics', icon: '📈' },
+  { to: '/card-insights', label: 'Card Insights', icon: '💳' },
   { to: '/settings', label: 'Settings', icon: '⚙️' },
 ];
 
@@ -95,6 +97,7 @@ function AppLayout() {
           <Route path="/transactions" element={<Transactions />} />
           <Route path="/upload" element={<Upload />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/card-insights" element={<CardInsights />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>

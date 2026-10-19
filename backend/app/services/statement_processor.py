@@ -2,6 +2,7 @@
 Statement Processor Service — orchestrates upload → parse → store pipeline.
 """
 import os
+import re
 import shutil
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -16,6 +17,67 @@ UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "upload
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
+def extract_card_metadata(pdf_path: str, bank_name: str) -> tuple[str | None, str | None]:
+    """Extract card product and last four digits from common statement layouts."""
+    try:
+        from app.parsers.utils import open_pdf
+        with open_pdf(pdf_path) as pdf:
+            text = "\n".join((page.extract_text() or "") for page in pdf.pages[:3])
+    except Exception:
+        return None, None
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    card_name = None
+    bank = (bank_name or "").upper()
+
+    if bank == "HDFC":
+        for line in lines[:30]:
+            match = re.search(r"^(.+?)\s+(?:HDFC\s+Bank\s+)?Credit\s+Card\s+Statement\b", line, re.I)
+            if match:
+                candidate = match.group(1).strip(" -:|")
+                if candidate and candidate.lower() not in {"your", "credit"}:
+                    card_name = candidate
+                    break
+    elif bank == "KOTAK":
+        for line in lines[:30]:
+            match = re.search(r"statement\s+for\s+your\s+(.+?)\s+Credit\s+Card\s+X\d{4}\b", line, re.I)
+            if match:
+                card_name = match.group(1).strip()
+                break
+    elif bank == "AXIS":
+        for line in lines[:30]:
+            match = re.search(r"^(.+?)\s+Axis\s+Bank(?:\s+(?:VISA|MASTER\s*CARD|RUPAY))?\s+Credit\s+Card\s+Statement\b", line, re.I)
+            if match:
+                card_name = match.group(1).strip(" -:|")
+                break
+    elif bank == "ICICI":
+        lower_text = text.lower()
+        if re.search(r"amazon\s+pay\s+credit\s+card", lower_text):
+            card_name = "Amazon Pay"
+        else:
+            # Some ICICI statements omit the product name from extracted text;
+            # accept a recognizable product token from the local attachment name.
+            filename = os.path.basename(pdf_path).lower()
+            if "coral" in filename:
+                card_name = "Coral"
+            elif "amazon" in filename and "pay" in filename:
+                card_name = "Amazon Pay"
+
+    last_four = None
+    for line in lines[:60]:
+        match = re.search(r"\b\d{4,6}[xX*]{3,}(\d{4})\b", line)
+        if match:
+            last_four = match.group(1)
+            break
+        if bank == "KOTAK":
+            match = re.search(r"\bX(\d{4})\b", line)
+            if match:
+                last_four = match.group(1)
+                break
+
+    return card_name, last_four
+
+
 def save_upload(file_data: bytes, filename: str) -> str:
     """Save uploaded file to disk, return path."""
     safe_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}"
@@ -25,7 +87,7 @@ def save_upload(file_data: bytes, filename: str) -> str:
     return dest
 
 
-def process_statement(pdf_path: str, card_id: int | None, db: Session) -> dict:
+def process_statement(pdf_path: str, card_id: int | None, db: Session, existing_statement_id: int | None = None) -> dict:
     """
     Full pipeline:
     1. Detect bank
@@ -37,20 +99,32 @@ def process_statement(pdf_path: str, card_id: int | None, db: Session) -> dict:
     filename = os.path.basename(pdf_path)
 
     # Create statement record (status=pending_review)
-    stmt = Statement(
-        card_id=card_id,
-        filename=filename,
-        bank_detected=bank_name,
-        status="pending_review",
-    )
-    db.add(stmt)
-    db.commit()
-    db.refresh(stmt)
+    if existing_statement_id is not None:
+        stmt = db.query(Statement).filter(Statement.id == existing_statement_id).first()
+        if not stmt:
+            raise ValueError(f"Pending statement {existing_statement_id} not found")
+        stmt.filename = filename
+        stmt.bank_detected = bank_name
+        stmt.status = "processing"
+        if card_id is not None:
+            stmt.card_id = card_id
+    else:
+        stmt = Statement(
+            card_id=card_id,
+            filename=filename,
+            bank_detected=bank_name,
+            status="pending_review",
+        )
+        db.add(stmt)
+        db.commit()
+        db.refresh(stmt)
 
     # Parse the PDF
     parse_result = parse_statement(pdf_path)
+    card_name, card_last_four = extract_card_metadata(pdf_path, bank_name)
 
     stmt.status = "parsed"
+    stmt.card_name = card_name
     stmt.transaction_count = len(parse_result.transactions)
     if parse_result.statement_period_start:
         stmt.statement_period_start = parse_result.statement_period_start
@@ -90,13 +164,15 @@ def process_statement(pdf_path: str, card_id: int | None, db: Session) -> dict:
     return {
         "statement_id": stmt.id,
         "bank_detected": bank_name,
+        "card_name": card_name,
+        "card_last_four": card_last_four,
         "transaction_count": len(preview),
         "parse_errors": parse_result.parse_errors,
         "transactions": preview,
     }
 
 
-def confirm_and_save(statement_id: int, reviewed_transactions: list, db: Session) -> int:
+def confirm_and_save(statement_id: int, reviewed_transactions: list, db: Session, card_id: int | None = None) -> int:
     """
     User has reviewed & corrected the parsed data.
     Save final transactions to DB.
@@ -104,6 +180,12 @@ def confirm_and_save(statement_id: int, reviewed_transactions: list, db: Session
     stmt = db.query(Statement).filter(Statement.id == statement_id).first()
     if not stmt:
         raise ValueError(f"Statement {statement_id} not found")
+
+    if card_id is not None:
+        from app.models.card import Card
+        if not db.query(Card.id).filter(Card.id == card_id).first():
+            raise ValueError(f"Card {card_id} not found")
+        stmt.card_id = card_id
 
     saved_count = 0
     for txn_data in reviewed_transactions:

@@ -29,5 +29,5 @@ def get_db():
 
 
 def init_db():
-    from app.models import card, statement, transaction, category_rule  # noqa
+    from app.models import card, statement, transaction, category_rule, gmail_import  # noqa
     Base.metadata.create_all(bind=engine)

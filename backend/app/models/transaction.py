@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Date, func
 from app.db.database import Base
+from sqlalchemy.orm import relationship
 
 
 class Transaction(Base):
@@ -8,6 +9,7 @@ class Transaction(Base):
     id = Column(Integer, primary_key=True, index=True)
     statement_id = Column(Integer, ForeignKey("statements.id"), nullable=True)
     card_id = Column(Integer, ForeignKey("cards.id"), nullable=True)
+    card = relationship("Card", lazy="joined")
 
     # Core fields (from PDF)
     date = Column(Date, nullable=False)
